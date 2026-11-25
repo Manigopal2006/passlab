@@ -129,25 +129,40 @@ static void audit(const char *s) {
 }
 
 int main(void) {
-    char choice[16], input[PASSLAB_MAX_INPUT*2+256], master[1024], output[PASSLAB_MAX_INPUT*2+256];
+    char choice[16], input[PASSLAB_MAX_INPUT*2+256], master[1024], session_key[1024] = {0};
+    char output[PASSLAB_MAX_INPUT*2+256];
+    int have_session_key = 0;
     puts("PassLab password auditor and private cipher");
-    puts("1) Audit password  2) Encrypt password  3) Decrypt text  4) Quit");
-    if(!read_line("Choose: ",choice,sizeof choice,0)) return 0;
-    if(strcmp(choice,"1")==0) {
-        if(!read_line("Password to audit: ",input,sizeof input,1)) return 1;
-        audit(input); OPENSSL_cleanse(input,sizeof input);
-    } else if(strcmp(choice,"2")==0) {
-        if(!read_line("Password to encrypt: ",input,sizeof input,1) || !read_line("Encryption key (remember this): ",master,sizeof master,1)) return 1;
-        if(!*master) { puts("Encryption key cannot be empty."); return 1; }
-        if(encrypt_text(input,master,output,sizeof output)) printf("Ciphertext (store this and remember your key):\n%s\n",output);
-        else puts("Encryption failed or input is too long.");
-        OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(output,sizeof output);
-    } else if(strcmp(choice,"3")==0) {
-        if(!read_line("Ciphertext: ",input,sizeof input,0) || !read_line("Encryption key: ",master,sizeof master,1)) return 1;
-        if(decrypt_text(input,master,output,sizeof output)) printf("Original password: %s\n",output);
-        else puts("Could not decrypt: invalid ciphertext or incorrect key.");
-        OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(output,sizeof output);
-    } else if(strcmp(choice,"4")==0) return 0;
-    else puts("Unknown choice.");
+    for (;;) {
+        puts("\n1) Audit password  2) Encrypt password  3) Decrypt text  4) Quit");
+        if(!read_line("Choose: ",choice,sizeof choice,0)) break;
+        if(strcmp(choice,"1")==0) {
+            if(!read_line("Password to audit: ",input,sizeof input,1)) break;
+            audit(input); OPENSSL_cleanse(input,sizeof input);
+        } else if(strcmp(choice,"2")==0) {
+            if(!read_line("Password to encrypt: ",input,sizeof input,1) || !read_line("Encryption key (choose and remember this separately): ",master,sizeof master,1)) break;
+            if(!*master) { puts("Encryption key cannot be empty."); OPENSSL_cleanse(input,sizeof input); continue; }
+            if(encrypt_text(input,master,output,sizeof output)) {
+                printf("Ciphertext (store this; the key is not included):\n%s\n",output);
+                memcpy(session_key,master,strlen(master)+1); have_session_key=1;
+            } else puts("Encryption failed or input is too long.");
+            OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(output,sizeof output);
+        } else if(strcmp(choice,"3")==0) {
+            if(!read_line("Ciphertext: ",input,sizeof input,0)) break;
+            if (have_session_key) {
+                char use_key[1024];
+                if(!read_line("Press Enter to use the key from this session, or type a different key: ",use_key,sizeof use_key,1)) break;
+                if(*use_key) {
+                    memcpy(master,use_key,strlen(use_key)+1);
+                } else memcpy(master,session_key,strlen(session_key)+1);
+                OPENSSL_cleanse(use_key,sizeof use_key);
+            } else if(!read_line("Encryption key you chose when encrypting: ",master,sizeof master,1)) break;
+            if(decrypt_text(input,master,output,sizeof output)) printf("Original password: %s\n",output);
+            else puts("Could not decrypt: invalid ciphertext or incorrect key.");
+            OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(output,sizeof output);
+        } else if(strcmp(choice,"4")==0) break;
+        else puts("Unknown choice.");
+    }
+    OPENSSL_cleanse(session_key,sizeof session_key);
     return 0;
 }
