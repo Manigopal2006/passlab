@@ -14,7 +14,7 @@
 #define IV_LEN 12
 #define TAG_LEN 16
 #define ITERATIONS 300000
-#define MAX_INPUT 4096
+#define PASSLAB_MAX_INPUT 4096
 
 static int read_line(const char *prompt, char *buf, size_t cap, int hidden) {
     struct termios oldt, newt;
@@ -52,9 +52,9 @@ static int derive_key(const char *pass, const unsigned char *salt, unsigned char
 
 static int encrypt_text(const char *plain, const char *master, char *out, size_t cap) {
     unsigned char salt[SALT_LEN], iv[IV_LEN], tag[TAG_LEN], key[32];
-    unsigned char cipher[MAX_INPUT+32]; int n=0, total=0;
+    unsigned char cipher[PASSLAB_MAX_INPUT+32]; int n=0, total=0;
     size_t len=strlen(plain);
-    if (len > MAX_INPUT || cap < 8+(SALT_LEN+IV_LEN+TAG_LEN+len)*2+1) return 0;
+    if (len > PASSLAB_MAX_INPUT || cap < 8+(SALT_LEN+IV_LEN+TAG_LEN+len)*2+1) return 0;
     if (RAND_bytes(salt, sizeof salt)!=1 || RAND_bytes(iv, sizeof iv)!=1 || derive_key(master,salt,key)!=1) return 0;
     EVP_CIPHER_CTX *ctx=EVP_CIPHER_CTX_new(); if (!ctx) return 0;
     int ok=EVP_EncryptInit_ex(ctx,EVP_aes_256_gcm(),NULL,NULL,NULL)==1 &&
@@ -79,8 +79,8 @@ static int encrypt_text(const char *plain, const char *master, char *out, size_t
 static int decrypt_text(const char *encoded, const char *master, char *out, size_t cap) {
     if (strncmp(encoded,"PWA1",4)!=0 || strlen(encoded)<4+(SALT_LEN+IV_LEN+TAG_LEN)*2 || (strlen(encoded)-4-(SALT_LEN+IV_LEN+TAG_LEN)*2)%2) return 0;
     size_t clen=(strlen(encoded)-4-(SALT_LEN+IV_LEN+TAG_LEN)*2)/2;
-    if (clen>MAX_INPUT || cap<=clen) return 0;
-    unsigned char salt[SALT_LEN],iv[IV_LEN],tag[TAG_LEN],key[32],cipher[MAX_INPUT+1];
+    if (clen>PASSLAB_MAX_INPUT || cap<=clen) return 0;
+    unsigned char salt[SALT_LEN],iv[IV_LEN],tag[TAG_LEN],key[32],cipher[PASSLAB_MAX_INPUT+1];
     const char *p=encoded+4;
     if (!from_hex(p,salt,SALT_LEN)) return 0; p+=SALT_LEN*2;
     if (!from_hex(p,iv,IV_LEN)) return 0; p+=IV_LEN*2;
@@ -129,7 +129,7 @@ static void audit(const char *s) {
 }
 
 int main(void) {
-    char choice[16], input[MAX_INPUT*2+256], master[1024], output[MAX_INPUT*2+256];
+    char choice[16], input[PASSLAB_MAX_INPUT*2+256], master[1024], output[PASSLAB_MAX_INPUT*2+256];
     puts("PassLab password auditor and private cipher");
     puts("1) Audit password  2) Encrypt password  3) Decrypt text  4) Quit");
     if(!read_line("Choose: ",choice,sizeof choice,0)) return 0;
