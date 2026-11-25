@@ -50,7 +50,7 @@ static void to_hex(const unsigned char *in, size_t n, char *out) {
     out[n*2]='\0';
 }
 static int from_hex(const char *in, unsigned char *out, size_t n) {
-    if (strlen(in) != n*2) return 0;
+    if (strlen(in) < n*2) return 0;
     for (size_t i=0;i<n;i++) { int a=hexval(in[i*2]), b=hexval(in[i*2+1]); if (a<0||b<0) return 0; out[i]=(unsigned char)((a<<4)|b); }
     return 1;
 }
