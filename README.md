@@ -4,7 +4,20 @@ A local C command-line password auditor and password encryption utility.
 
 ## Build and run
 
-Requires a C compiler, OpenSSL development headers/libraries, and `make`.
+Requires a C compiler, OpenSSL development headers/libraries, and `make`. Install the OpenSSL development package first if `openssl/evp.h` is missing:
+
+```sh
+# macOS (Homebrew)
+brew install openssl@3 pkg-config
+
+# Debian or Ubuntu
+sudo apt install build-essential libssl-dev pkg-config
+
+# Fedora
+sudo dnf install gcc make openssl-devel pkgconf-pkg-config
+```
+
+The Makefile reads OpenSSL's include and library paths through `pkg-config` when available.
 
 ```sh
 make
