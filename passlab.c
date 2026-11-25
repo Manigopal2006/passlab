@@ -15,6 +15,14 @@
 #define TAG_LEN 16
 #define ITERATIONS 300000
 #define PASSLAB_MAX_INPUT 4096
+#define MAX_SESSION_KEYS 16
+#define SESSION_KEY_SIZE 1024
+
+typedef struct {
+    char keys[MAX_SESSION_KEYS][SESSION_KEY_SIZE];
+    size_t count;
+    size_t active;
+} CredentialTable;
 
 static int read_line(const char *prompt, char *buf, size_t cap, int hidden) {
     struct termios oldt, newt;
@@ -50,7 +58,7 @@ static int derive_key(const char *pass, const unsigned char *salt, unsigned char
     return PKCS5_PBKDF2_HMAC(pass, (int)strlen(pass), salt, SALT_LEN, ITERATIONS, EVP_sha256(), 32, key);
 }
 
-static int encrypt_text(const char *plain, const char *master, char *out, size_t cap) {
+static int encrypt_text(const char *plain, const char *master, unsigned char key_id, char *out, size_t cap) {
     unsigned char salt[SALT_LEN], iv[IV_LEN], tag[TAG_LEN], key[32];
     unsigned char cipher[PASSLAB_MAX_INPUT+32]; int n=0, total=0;
     size_t len=strlen(plain);
@@ -67,7 +75,8 @@ static int encrypt_text(const char *plain, const char *master, char *out, size_t
     if (ok) ok=EVP_CIPHER_CTX_ctrl(ctx,EVP_CTRL_GCM_GET_TAG,TAG_LEN,tag)==1;
     EVP_CIPHER_CTX_free(ctx);
     if (!ok) return 0;
-    strcpy(out,"PWA1"); size_t p=4;
+    strcpy(out,"PWA2"); size_t p=4;
+    to_hex(&key_id,1,out+p); p+=2;
     to_hex(salt,SALT_LEN,out+p); p+=SALT_LEN*2;
     to_hex(iv,IV_LEN,out+p); p+=IV_LEN*2;
     to_hex(tag,TAG_LEN,out+p); p+=TAG_LEN*2;
@@ -76,12 +85,15 @@ static int encrypt_text(const char *plain, const char *master, char *out, size_t
     return 1;
 }
 
-static int decrypt_text(const char *encoded, const char *master, char *out, size_t cap) {
-    if (strncmp(encoded,"PWA1",4)!=0 || strlen(encoded)<4+(SALT_LEN+IV_LEN+TAG_LEN)*2 || (strlen(encoded)-4-(SALT_LEN+IV_LEN+TAG_LEN)*2)%2) return 0;
-    size_t clen=(strlen(encoded)-4-(SALT_LEN+IV_LEN+TAG_LEN)*2)/2;
+static int decrypt_text(const char *encoded, const CredentialTable *table, char *out, size_t cap) {
+    if (strncmp(encoded,"PWA2",4)!=0 || strlen(encoded)<6+(SALT_LEN+IV_LEN+TAG_LEN)*2 || (strlen(encoded)-6-(SALT_LEN+IV_LEN+TAG_LEN)*2)%2) return 0;
+    unsigned char key_id;
+    if (!from_hex(encoded+4,&key_id,1) || key_id>=table->count) return 0;
+    const char *master=table->keys[key_id];
+    size_t clen=(strlen(encoded)-6-(SALT_LEN+IV_LEN+TAG_LEN)*2)/2;
     if (clen>PASSLAB_MAX_INPUT || cap<=clen) return 0;
     unsigned char salt[SALT_LEN],iv[IV_LEN],tag[TAG_LEN],key[32],cipher[PASSLAB_MAX_INPUT+1];
-    const char *p=encoded+4;
+    const char *p=encoded+6;
     if (!from_hex(p,salt,SALT_LEN)) return 0; p+=SALT_LEN*2;
     if (!from_hex(p,iv,IV_LEN)) return 0; p+=IV_LEN*2;
     if (!from_hex(p,tag,TAG_LEN)) return 0; p+=TAG_LEN*2;
@@ -129,40 +141,55 @@ static void audit(const char *s) {
 }
 
 int main(void) {
-    char choice[16], input[PASSLAB_MAX_INPUT*2+256], master[1024], session_key[1024] = {0};
-    char output[PASSLAB_MAX_INPUT*2+256];
-    int have_session_key = 0;
+    char choice[16], input[PASSLAB_MAX_INPUT*2+256], master[SESSION_KEY_SIZE];
+    char confirm[SESSION_KEY_SIZE], output[PASSLAB_MAX_INPUT*2+256];
+    CredentialTable credentials = {0};
     puts("PassLab password auditor and private cipher");
+    puts("First use: create a session encryption key. It will remain only in RAM until you quit.");
+    if (!read_line("Create encryption key: ",credentials.keys[0],SESSION_KEY_SIZE,1)) return 1;
+    if (!credentials.keys[0][0]) { puts("Encryption key cannot be empty."); return 1; }
+    credentials.count=1; credentials.active=0;
     for (;;) {
-        puts("\n1) Audit password  2) Encrypt password  3) Decrypt text  4) Quit");
+        puts("\n1) Audit password  2) Encrypt password  3) Decrypt text  4) Change encryption key  5) Quit");
         if(!read_line("Choose: ",choice,sizeof choice,0)) break;
         if(strcmp(choice,"1")==0) {
             if(!read_line("Password to audit: ",input,sizeof input,1)) break;
             audit(input); OPENSSL_cleanse(input,sizeof input);
         } else if(strcmp(choice,"2")==0) {
-            if(!read_line("Password to encrypt: ",input,sizeof input,1) || !read_line("Encryption key (choose and remember this separately): ",master,sizeof master,1)) break;
-            if(!*master) { puts("Encryption key cannot be empty."); OPENSSL_cleanse(input,sizeof input); continue; }
-            if(encrypt_text(input,master,output,sizeof output)) {
-                printf("Ciphertext (store this; the key is not included):\n%s\n",output);
-                memcpy(session_key,master,strlen(master)+1); have_session_key=1;
-            } else puts("Encryption failed or input is too long.");
-            OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(output,sizeof output);
+            if(!read_line("Password to encrypt: ",input,sizeof input,1)) break;
+            if(encrypt_text(input,credentials.keys[credentials.active],(unsigned char)credentials.active,output,sizeof output))
+                printf("Ciphertext (store this; session key is not included):\n%s\n",output);
+            else puts("Encryption failed or input is too long.");
+            OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(output,sizeof output);
         } else if(strcmp(choice,"3")==0) {
             if(!read_line("Ciphertext: ",input,sizeof input,0)) break;
-            if (have_session_key) {
-                char use_key[1024];
-                if(!read_line("Press Enter to use the key from this session, or type a different key: ",use_key,sizeof use_key,1)) break;
-                if(*use_key) {
-                    memcpy(master,use_key,strlen(use_key)+1);
-                } else memcpy(master,session_key,strlen(session_key)+1);
-                OPENSSL_cleanse(use_key,sizeof use_key);
-            } else if(!read_line("Encryption key you chose when encrypting: ",master,sizeof master,1)) break;
-            if(decrypt_text(input,master,output,sizeof output)) printf("Original password: %s\n",output);
+            if(decrypt_text(input,&credentials,output,sizeof output)) printf("Original password: %s\n",output);
             else puts("Could not decrypt: invalid ciphertext or incorrect key.");
-            OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(output,sizeof output);
-        } else if(strcmp(choice,"4")==0) break;
+            OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(output,sizeof output);
+        } else if(strcmp(choice,"4")==0) {
+            if (credentials.count>=MAX_SESSION_KEYS) { puts("Session key history is full; restart PassLab to begin a new session."); continue; }
+            if(!read_line("Current encryption key: ",master,sizeof master,1)) break;
+            if(strlen(master)!=strlen(credentials.keys[credentials.active]) ||
+               CRYPTO_memcmp(master,credentials.keys[credentials.active],strlen(credentials.keys[credentials.active])+1)!=0) {
+                puts("Current key did not match."); OPENSSL_cleanse(master,sizeof master); continue;
+            }
+            if(!read_line("New encryption key: ",confirm,sizeof confirm,1) || !read_line("Confirm new encryption key: ",input,sizeof input,1)) break;
+            if(!confirm[0] || strcmp(confirm,input)!=0) {
+                puts("New keys were empty or did not match.");
+                OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(confirm,sizeof confirm); OPENSSL_cleanse(input,sizeof input); continue;
+            }
+            if(strcmp(confirm,credentials.keys[credentials.active])==0) {
+                puts("New key must differ from the current key.");
+                OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(confirm,sizeof confirm); OPENSSL_cleanse(input,sizeof input); continue;
+            }
+            credentials.active=credentials.count++;
+            memcpy(credentials.keys[credentials.active],confirm,strlen(confirm)+1);
+            puts("Encryption key changed. Earlier ciphertext can still be decrypted during this session.");
+            OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(confirm,sizeof confirm); OPENSSL_cleanse(input,sizeof input);
+        } else if(strcmp(choice,"5")==0) break;
         else puts("Unknown choice.");
     }
-    OPENSSL_cleanse(session_key,sizeof session_key);
+    OPENSSL_cleanse(&credentials,sizeof credentials);
+    OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(confirm,sizeof confirm);
     return 0;
 }
