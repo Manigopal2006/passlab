@@ -85,11 +85,13 @@ static int encrypt_text(const char *plain, const char *master, unsigned char key
     return 1;
 }
 
-static int decrypt_text(const char *encoded, const CredentialTable *table, char *out, size_t cap) {
+static int decrypt_text(const char *encoded, const CredentialTable *table, const char *master, char *out, size_t cap) {
     if (strncmp(encoded,"PWA2",4)!=0 || strlen(encoded)<6+(SALT_LEN+IV_LEN+TAG_LEN)*2 || (strlen(encoded)-6-(SALT_LEN+IV_LEN+TAG_LEN)*2)%2) return 0;
     unsigned char key_id;
     if (!from_hex(encoded+4,&key_id,1) || key_id>=table->count) return 0;
-    const char *master=table->keys[key_id];
+    const char *stored_key=table->keys[key_id];
+    if (strlen(master)!=strlen(stored_key) ||
+        CRYPTO_memcmp(master,stored_key,strlen(stored_key)+1)!=0) return 0;
     size_t clen=(strlen(encoded)-6-(SALT_LEN+IV_LEN+TAG_LEN)*2)/2;
     if (clen>PASSLAB_MAX_INPUT || cap<=clen) return 0;
     unsigned char salt[SALT_LEN],iv[IV_LEN],tag[TAG_LEN],key[32],cipher[PASSLAB_MAX_INPUT+1];
@@ -162,10 +164,11 @@ int main(void) {
             else puts("Encryption failed or input is too long.");
             OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(output,sizeof output);
         } else if(strcmp(choice,"3")==0) {
-            if(!read_line("Ciphertext: ",input,sizeof input,0)) break;
-            if(decrypt_text(input,&credentials,output,sizeof output)) printf("Original password: %s\n",output);
+            if(!read_line("Ciphertext: ",input,sizeof input,0) ||
+               !read_line("Enter the encryption key for this ciphertext: ",master,sizeof master,1)) break;
+            if(decrypt_text(input,&credentials,master,output,sizeof output)) printf("Original password: %s\n",output);
             else puts("Could not decrypt: invalid ciphertext or incorrect key.");
-            OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(output,sizeof output);
+            OPENSSL_cleanse(input,sizeof input); OPENSSL_cleanse(master,sizeof master); OPENSSL_cleanse(output,sizeof output);
         } else if(strcmp(choice,"4")==0) {
             if (credentials.count>=MAX_SESSION_KEYS) { puts("Session key history is full; restart PassLab to begin a new session."); continue; }
             if(!read_line("Current encryption key: ",master,sizeof master,1)) break;
